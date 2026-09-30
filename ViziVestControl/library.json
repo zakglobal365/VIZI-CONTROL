@@ -1,7 +1,13 @@
-
 {
   "name": "ViziVestControl",
   "build": {
     "libArchive": false
-  }
+  },
+  "dependencies": [
+    {
+      "owner": "espressif",
+      "name": "ESP32 BLE Arduino",
+      "version": "2.0.0"
+    }
+  ]
 }
