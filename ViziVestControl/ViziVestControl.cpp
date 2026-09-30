@@ -2,24 +2,48 @@
 
 #ifdef ARDUINO_ARCH_ESP32
 
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "esp_gap_ble_api.h"
+#include "esp_gatts_api.h"
+#include "esp_gatt_common_api.h"
+#include "esp_bt_defs.h"
+#include "esp_gatt_defs.h"
 
-#define VIZIVEST_SERVICE_UUID  "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-#define VIZIVEST_COMMAND_UUID "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
-#define VIZIVEST_STATUS_UUID  "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+#include <cstring>
 
-class ViziVestControl : public Usermod {
-
+class ViziVestControl : public Usermod
+{
 private:
 
-  BLEServer* bleServer = nullptr;
-  BLECharacteristic* commandCharacteristic = nullptr;
-  BLECharacteristic* statusCharacteristic = nullptr;
+  // ============================================================
+  // VIZIVEST BLE UUIDs
+  // ============================================================
 
-  bool bleStarted = false;
+  static const uint8_t SERVICE_UUID[16];
+  static const uint8_t COMMAND_UUID[16];
+
+  // ============================================================
+  // BLE state
+  // ============================================================
+
+  static ViziVestControl* instance;
+
+  esp_gatt_if_t gattsInterface = ESP_GATT_IF_NONE;
+
+  uint16_t serviceHandle = 0;
+  uint16_t commandHandle = 0;
+
+  bool bluetoothStarted = false;
+  bool bluetoothReady = false;
+
+  // Command received from phone.
+  volatile bool commandPending = false;
+  char pendingCommand[20] = {0};
+
+  // ============================================================
+  // WLED preset assignments
+  // ============================================================
 
   uint8_t presetGlow   = 1;
   uint8_t presetLeft   = 2;
@@ -27,178 +51,662 @@ private:
   uint8_t presetHazard = 4;
   uint8_t presetOff    = 5;
 
-  void sendStatus(const char* status)
-  {
-    if (!statusCharacteristic) return;
+  // ============================================================
+  // BLE advertising
+  // ============================================================
 
-    statusCharacteristic->setValue(status);
-    statusCharacteristic->notify();
+  static esp_ble_adv_params_t advertisingParams;
+
+  static esp_ble_adv_data_t advertisingData;
+
+  // ============================================================
+  // BLE GAP callback
+  // ============================================================
+
+  static void gapCallback(
+    esp_gap_ble_cb_event_t event,
+    esp_ble_gap_cb_param_t* param
+  )
+  {
+    if (!instance)
+      return;
+
+    switch (event)
+    {
+      case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
+
+        esp_ble_gap_start_advertising(
+          &advertisingParams
+        );
+
+        break;
+
+      case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
+
+        if (param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS)
+        {
+          instance->bluetoothReady = true;
+
+          Serial.println(
+            "VIZIVEST BLE advertising started"
+          );
+        }
+        else
+        {
+          Serial.println(
+            "VIZIVEST BLE advertising failed"
+          );
+        }
+
+        break;
+
+      default:
+        break;
+    }
   }
 
-  void runPreset(uint8_t preset, const char* status)
+  // ============================================================
+  // BLE GATT callback
+  // ============================================================
+
+  static void gattsCallback(
+    esp_gatts_cb_event_t event,
+    esp_gatt_if_t gatts_if,
+    esp_ble_gatts_cb_param_t* param
+  )
   {
-    applyPreset(preset, CALL_MODE_DIRECT_CHANGE);
-    sendStatus(status);
+    if (!instance)
+      return;
+
+    switch (event)
+    {
+      // --------------------------------------------------------
+      // BLE application registered
+      // --------------------------------------------------------
+
+      case ESP_GATTS_REG_EVT:
+      {
+        if (param->reg.status != ESP_GATT_OK)
+        {
+          Serial.println(
+            "VIZIVEST BLE registration failed"
+          );
+
+          return;
+        }
+
+        instance->gattsInterface = gatts_if;
+
+        esp_ble_gap_set_device_name(
+          "VIZIVEST"
+        );
+
+        esp_ble_gap_config_adv_data(
+          &advertisingData
+        );
+
+        // Configure service UUID.
+        esp_gatt_srvc_id_t serviceId;
+
+        memset(
+          &serviceId,
+          0,
+          sizeof(serviceId)
+        );
+
+        serviceId.is_primary = true;
+
+        serviceId.id.inst_id = 0;
+
+        serviceId.id.uuid.len = ESP_UUID_LEN_128;
+
+        memcpy(
+          serviceId.id.uuid.uuid.uuid128,
+          SERVICE_UUID,
+          16
+        );
+
+        esp_ble_gatts_create_service(
+          gatts_if,
+          &serviceId,
+          4
+        );
+
+        break;
+      }
+
+      // --------------------------------------------------------
+      // Service created
+      // --------------------------------------------------------
+
+      case ESP_GATTS_CREATE_EVT:
+      {
+        if (param->create.status != ESP_GATT_OK)
+          return;
+
+        instance->serviceHandle =
+          param->create.service_handle;
+
+        esp_bt_uuid_t commandUuid;
+
+        memset(
+          &commandUuid,
+          0,
+          sizeof(commandUuid)
+        );
+
+        commandUuid.len = ESP_UUID_LEN_128;
+
+        memcpy(
+          commandUuid.uuid.uuid128,
+          COMMAND_UUID,
+          16
+        );
+
+        uint8_t initialValue[] = "READY";
+
+        esp_attr_value_t commandValue;
+
+        commandValue.attr_max_len =
+          sizeof(initialValue);
+
+        commandValue.attr_len =
+          sizeof(initialValue) - 1;
+
+        commandValue.attr_value =
+          initialValue;
+
+        esp_attr_control_t control;
+
+        control.auto_rsp =
+          ESP_GATT_AUTO_RSP;
+
+        esp_ble_gatts_add_char(
+          instance->serviceHandle,
+          &commandUuid,
+
+          ESP_GATT_PERM_WRITE,
+
+          ESP_GATT_CHAR_PROP_BIT_WRITE |
+          ESP_GATT_CHAR_PROP_BIT_WRITE_NR,
+
+          &commandValue,
+
+          &control
+        );
+
+        break;
+      }
+
+      // --------------------------------------------------------
+      // Characteristic created
+      // --------------------------------------------------------
+
+      case ESP_GATTS_ADD_CHAR_EVT:
+      {
+        if (param->add_char.status != ESP_GATT_OK)
+          return;
+
+        instance->commandHandle =
+          param->add_char.attr_handle;
+
+        esp_ble_gatts_start_service(
+          instance->serviceHandle
+        );
+
+        Serial.println(
+          "VIZIVEST BLE service ready"
+        );
+
+        break;
+      }
+
+      // --------------------------------------------------------
+      // Phone writes a command
+      // --------------------------------------------------------
+
+      case ESP_GATTS_WRITE_EVT:
+      {
+        if (param->write.is_prep)
+          break;
+
+        if (
+          param->write.handle ==
+          instance->commandHandle
+        )
+        {
+          uint16_t length =
+            param->write.len;
+
+          if (length >=
+              sizeof(instance->pendingCommand))
+          {
+            length =
+              sizeof(instance->pendingCommand) - 1;
+          }
+
+          memcpy(
+            instance->pendingCommand,
+            param->write.value,
+            length
+          );
+
+          instance->pendingCommand[length] =
+            '\0';
+
+          instance->commandPending = true;
+        }
+
+        break;
+      }
+
+      // --------------------------------------------------------
+      // Phone connected
+      // --------------------------------------------------------
+
+      case ESP_GATTS_CONNECT_EVT:
+
+        Serial.println(
+          "VIZIVEST phone connected"
+        );
+
+        break;
+
+      // --------------------------------------------------------
+      // Phone disconnected
+      // --------------------------------------------------------
+
+      case ESP_GATTS_DISCONNECT_EVT:
+
+        Serial.println(
+          "VIZIVEST phone disconnected"
+        );
+
+        esp_ble_gap_start_advertising(
+          &advertisingParams
+        );
+
+        break;
+
+      default:
+        break;
+    }
   }
 
-  void processCommand(String command)
-  {
-    command.trim();
-    command.toUpperCase();
+  // ============================================================
+  // Process commands safely in WLED's main loop
+  // ============================================================
 
-    if (command == "GLOW")
+  void processPendingCommand()
+  {
+    if (!commandPending)
+      return;
+
+    char command[20];
+
+    noInterrupts();
+
+    strncpy(
+      command,
+      pendingCommand,
+      sizeof(command)
+    );
+
+    command[
+      sizeof(command) - 1
+    ] = '\0';
+
+    commandPending = false;
+
+    interrupts();
+
+    String cmd = String(command);
+
+    cmd.trim();
+    cmd.toUpperCase();
+
+    Serial.print(
+      "VIZIVEST BLE COMMAND: "
+    );
+
+    Serial.println(cmd);
+
+    // ----------------------------------------------------------
+    // GLOW
+    // ----------------------------------------------------------
+
+    if (cmd == "GLOW")
     {
-      runPreset(presetGlow, "GLOW");
+      applyPreset(
+        presetGlow,
+        CALL_MODE_DIRECT_CHANGE
+      );
     }
-    else if (command == "LEFT")
+
+    // ----------------------------------------------------------
+    // LEFT
+    // ----------------------------------------------------------
+
+    else if (cmd == "LEFT")
     {
-      runPreset(presetLeft, "LEFT");
+      applyPreset(
+        presetLeft,
+        CALL_MODE_DIRECT_CHANGE
+      );
     }
-    else if (command == "RIGHT")
+
+    // ----------------------------------------------------------
+    // RIGHT
+    // ----------------------------------------------------------
+
+    else if (cmd == "RIGHT")
     {
-      runPreset(presetRight, "RIGHT");
+      applyPreset(
+        presetRight,
+        CALL_MODE_DIRECT_CHANGE
+      );
     }
-    else if (command == "HAZARD")
+
+    // ----------------------------------------------------------
+    // HAZARD
+    // ----------------------------------------------------------
+
+    else if (cmd == "HAZARD")
     {
-      runPreset(presetHazard, "HAZARD");
+      applyPreset(
+        presetHazard,
+        CALL_MODE_DIRECT_CHANGE
+      );
     }
-    else if (command == "OFF")
+
+    // ----------------------------------------------------------
+    // OFF
+    // ----------------------------------------------------------
+
+    else if (cmd == "OFF")
     {
-      runPreset(presetOff, "OFF");
+      applyPreset(
+        presetOff,
+        CALL_MODE_DIRECT_CHANGE
+      );
     }
+
     else
     {
-      sendStatus("UNKNOWN");
+      Serial.println(
+        "Unknown VIZIVEST command"
+      );
     }
   }
 
-  class CommandCallbacks : public BLECharacteristicCallbacks
+  // ============================================================
+  // Start Bluetooth
+  // ============================================================
+
+  void startBluetooth()
   {
-  private:
-    ViziVestControl* parent;
+    Serial.println(
+      "Starting VIZIVEST Bluetooth..."
+    );
 
-  public:
-    CommandCallbacks(ViziVestControl* p) : parent(p) {}
+    // Release Classic Bluetooth memory.
+    // We only need BLE.
+    esp_bt_controller_mem_release(
+      ESP_BT_MODE_CLASSIC_BT
+    );
 
-    void onWrite(BLECharacteristic* characteristic) override
+    esp_bt_controller_config_t btConfig =
+      BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+
+    esp_err_t result =
+      esp_bt_controller_init(
+        &btConfig
+      );
+
+    if (
+      result != ESP_OK &&
+      result != ESP_ERR_INVALID_STATE
+    )
     {
-      String command = characteristic->getValue().c_str();
+      Serial.println(
+        "Bluetooth controller init failed"
+      );
 
-      if (command.length() == 0)
-        return;
-
-      parent->processCommand(command);
+      return;
     }
-  };
 
-  class ServerCallbacks : public BLEServerCallbacks
-  {
-  private:
-    ViziVestControl* parent;
+    result =
+      esp_bt_controller_enable(
+        ESP_BT_MODE_BLE
+      );
 
-  public:
-    ServerCallbacks(ViziVestControl* p) : parent(p) {}
-
-    void onConnect(BLEServer* server) override
+    if (
+      result != ESP_OK &&
+      result != ESP_ERR_INVALID_STATE
+    )
     {
-      parent->sendStatus("CONNECTED");
+      Serial.println(
+        "Bluetooth controller enable failed"
+      );
+
+      return;
     }
 
-    void onDisconnect(BLEServer* server) override
+    result =
+      esp_bluedroid_init();
+
+    if (
+      result != ESP_OK &&
+      result != ESP_ERR_INVALID_STATE
+    )
     {
-      parent->sendStatus("DISCONNECTED");
+      Serial.println(
+        "Bluedroid init failed"
+      );
 
-      delay(100);
-      BLEDevice::startAdvertising();
+      return;
     }
-  };
+
+    result =
+      esp_bluedroid_enable();
+
+    if (
+      result != ESP_OK &&
+      result != ESP_ERR_INVALID_STATE
+    )
+    {
+      Serial.println(
+        "Bluedroid enable failed"
+      );
+
+      return;
+    }
+
+    esp_ble_gap_register_callback(
+      gapCallback
+    );
+
+    esp_ble_gatts_register_callback(
+      gattsCallback
+    );
+
+    esp_ble_gatts_app_register(
+      0
+    );
+
+    bluetoothStarted = true;
+
+    Serial.println(
+      "VIZIVEST Bluetooth initialized"
+    );
+  }
 
 public:
 
+  // ============================================================
+  // WLED setup
+  // ============================================================
+
   void setup() override
   {
-    BLEDevice::init("VIZIVEST");
+    instance = this;
 
-    bleServer = BLEDevice::createServer();
-
-    bleServer->setCallbacks(
-      new ServerCallbacks(this)
-    );
-
-    BLEService* service =
-      bleServer->createService(
-        VIZIVEST_SERVICE_UUID
-      );
-
-    commandCharacteristic =
-      service->createCharacteristic(
-        VIZIVEST_COMMAND_UUID,
-        BLECharacteristic::PROPERTY_WRITE |
-        BLECharacteristic::PROPERTY_WRITE_NR
-      );
-
-    statusCharacteristic =
-      service->createCharacteristic(
-        VIZIVEST_STATUS_UUID,
-        BLECharacteristic::PROPERTY_READ |
-        BLECharacteristic::PROPERTY_NOTIFY
-      );
-
-    statusCharacteristic->addDescriptor(
-      new BLE2902()
-    );
-
-    commandCharacteristic->setCallbacks(
-      new CommandCallbacks(this)
-    );
-
-    statusCharacteristic->setValue("READY");
-
-    service->start();
-
-    BLEAdvertising* advertising =
-      BLEDevice::getAdvertising();
-
-    advertising->addServiceUUID(
-      VIZIVEST_SERVICE_UUID
-    );
-
-    advertising->setScanResponse(true);
-    advertising->setMinPreferred(0x06);
-    advertising->setMinPreferred(0x12);
-
-    BLEDevice::startAdvertising();
-
-    bleStarted = true;
+    startBluetooth();
 
     Serial.println();
-    Serial.println("================================");
-    Serial.println(" VIZIVEST BLE STARTED");
-    Serial.println(" Device: VIZIVEST");
-    Serial.println(" Commands:");
-    Serial.println(" GLOW");
-    Serial.println(" LEFT");
-    Serial.println(" RIGHT");
-    Serial.println(" HAZARD");
-    Serial.println(" OFF");
-    Serial.println("================================");
+    Serial.println(
+      "=============================="
+    );
+    Serial.println(
+      " VIZIVEST CONTROL"
+    );
+    Serial.println(
+      " BLE NAME: VIZIVEST"
+    );
+    Serial.println(
+      "=============================="
+    );
   }
+
+  // ============================================================
+  // WLED loop
+  // ============================================================
 
   void loop() override
   {
+    processPendingCommand();
   }
+
+  // ============================================================
+  // WLED info
+  // ============================================================
 
   void addToJsonInfo(JsonObject& root) override
   {
-    JsonObject info = root["ViziVest"].to<JsonObject>();
+    JsonObject info =
+      root.createNestedObject(
+        "ViziVest"
+      );
 
-    if (!info)
-      info = root.createNestedObject("ViziVest");
+    info["BLE"] =
+      bluetoothStarted;
 
-    info["BLE"] = bleStarted;
-    info["Device"] = "VIZIVEST";
+    info["Device"] =
+      "VIZIVEST";
+
+    info["Ready"] =
+      bluetoothReady;
   }
 };
+
+
+// ============================================================
+// UUID definitions
+// ============================================================
+
+const uint8_t ViziVestControl::SERVICE_UUID[16] =
+{
+  0x6E, 0x40, 0x00, 0x01,
+  0xB5, 0xA3,
+  0xF3, 0x93,
+  0xE0, 0xA9,
+  0xE5, 0x0E,
+  0x24, 0xDC,
+  0xCA, 0x9E
+};
+
+const uint8_t ViziVestControl::COMMAND_UUID[16] =
+{
+  0x6E, 0x40, 0x00, 0x02,
+  0xB5, 0xA3,
+  0xF3, 0x93,
+  0xE0, 0xA9,
+  0xE5, 0x0E,
+  0x24, 0xDC,
+  0xCA, 0x9E
+};
+
+
+// ============================================================
+// BLE advertising parameters
+// ============================================================
+
+esp_ble_adv_params_t ViziVestControl::advertisingParams =
+{
+  .adv_int_min = 0x20,
+  .adv_int_max = 0x40,
+
+  .adv_type =
+    ADV_TYPE_IND,
+
+  .own_addr_type =
+    BLE_ADDR_TYPE_PUBLIC,
+
+  .peer_addr =
+    {0, 0, 0, 0, 0, 0},
+
+  .peer_addr_type =
+    BLE_ADDR_TYPE_PUBLIC,
+
+  .channel_map =
+    ADV_CHNL_ALL,
+
+  .adv_filter_policy =
+    ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY
+};
+
+
+// ============================================================
+// BLE advertising data
+// ============================================================
+
+esp_ble_adv_data_t ViziVestControl::advertisingData =
+{
+  .set_scan_rsp = false,
+
+  .include_name = true,
+
+  .include_txpower = true,
+
+  .min_interval = 0x06,
+
+  .max_interval = 0x12,
+
+  .appearance = 0x00,
+
+  .manufacturer_len = 0,
+
+  .p_manufacturer_data = nullptr,
+
+  .service_data_len = 0,
+
+  .p_service_data = nullptr,
+
+  .service_uuid_len = ESP_UUID_LEN_128,
+
+  .p_service_uuid =
+    const_cast<uint8_t*>(
+      ViziVestControl::SERVICE_UUID
+    ),
+
+  .flag =
+    ESP_BLE_ADV_FLAG_GEN_DISC |
+    ESP_BLE_ADV_FLAG_BREDR_NOT_SPT
+};
+
+
+// ============================================================
+// Singleton
+// ============================================================
+
+ViziVestControl*
+ViziVestControl::instance =
+  nullptr;
+
+
+// ============================================================
+// Register WLED usermod
+// ============================================================
 
 static ViziVestControl viziVestControl;
 
