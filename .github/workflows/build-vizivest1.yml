@@ -1,0 +1,60 @@
+name: Build ViziVest WLED 16.0.1
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ViziVest Firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout WLED 16.0.1
+        uses: actions/checkout@v4
+        with:
+          repository: WLED/WLED
+          ref: v16.0.1
+          path: WLED
+
+      - name: Checkout ViziVest Control
+        uses: actions/checkout@v4
+        with:
+          path: ViziVestSource
+
+      - name: Install ViziVest usermod
+        run: |
+          mkdir -p WLED/usermods/ViziVestControl
+          cp ViziVestSource/ViziVestControl/library.json WLED/usermods/ViziVestControl/
+          cp ViziVestSource/ViziVestControl/ViziVestControl.cpp WLED/usermods/ViziVestControl/
+
+          echo "ViziVest files:"
+          ls -la WLED/usermods/ViziVestControl
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        working-directory: WLED
+        run: pip install -r requirements.txt
+
+      - name: Configure WLED
+        working-directory: WLED
+        run: |
+          cp usermods/platformio_override.usermods.ini platformio_override.ini
+          echo >> platformio_override.ini
+          echo "custom_usermods = ViziVestControl" >> platformio_override.ini
+
+          echo "Build configuration:"
+          cat platformio_override.ini
+
+      - name: Build WLED 16.0.1
+        working-directory: WLED
+        run: pio run -e usermods_esp32
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ViziVest-WLED-16.0.1
+          path: WLED/build_output/**
