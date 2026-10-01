@@ -1,0 +1,11 @@
+[env:usermods_esp32]
+
+extends = env:esp32dev
+
+custom_usermods = ViziVestControl
+
+lib_deps =
+  ${env:esp32dev.lib_deps}
+  BLE
+
+board_build.partitions = ${esp32.extreme_partitions}
