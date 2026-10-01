@@ -55,19 +55,18 @@ jobs:
           echo >> platformio_override.ini
           echo "custom_usermods = ViziVestControl" >> platformio_override.ini
 
+          echo "Bluetooth build flags:"
+          echo "CONFIG_BT_ENABLED=1"
+          echo "CONFIG_BLUEDROID_ENABLED=1"
+          echo "CONFIG_BT_BLE_ENABLED=1"
+          echo "CONFIG_GATTS_ENABLE=1"
+          echo "CONFIG_GATTC_ENABLE=1"
+
+          echo >> platformio_override.ini
+          echo "build_flags = \${esp32dev.build_flags} -DCONFIG_BT_ENABLED=1 -DCONFIG_BLUEDROID_ENABLED=1 -DCONFIG_BT_BLE_ENABLED=1 -DCONFIG_GATTS_ENABLE=1 -DCONFIG_GATTC_ENABLE=1" >> platformio_override.ini
+
           echo "Build configuration:"
           cat platformio_override.ini
-
-      - name: Enable Bluetooth
-        working-directory: WLED
-        run: |
-          echo "CONFIG_BT_ENABLED=y" > sdkconfig.defaults
-          echo "CONFIG_BLUEDROID_ENABLED=y" >> sdkconfig.defaults
-          echo "CONFIG_BT_BLE_ENABLED=y" >> sdkconfig.defaults
-          echo "CONFIG_BT_GATTS_ENABLE=y" >> sdkconfig.defaults
-
-          echo "Bluetooth configuration:"
-          cat sdkconfig.defaults
 
       - name: Build WLED 16.0.1
         working-directory: WLED
