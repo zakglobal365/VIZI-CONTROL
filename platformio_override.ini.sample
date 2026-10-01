@@ -1,0 +1,16 @@
+[platformio]
+
+default_envs = usermods_esp32
+
+
+[env:usermods_esp32]
+
+extends = env:esp32dev
+
+custom_usermods = ViziVestControl
+
+lib_deps =
+  ${env:esp32dev.lib_deps}
+  ESP32 BLE Arduino @ 2.0.0
+
+board_build.partitions = ${esp32.extreme_partitions}
