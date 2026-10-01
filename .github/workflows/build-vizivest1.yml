@@ -33,8 +33,12 @@ jobs:
       - name: Install ViziVest usermod
         run: |
           mkdir -p WLED/usermods/ViziVestControl
-          cp ViziVestSource/ViziVestControl/library.json WLED/usermods/ViziVestControl/
-          cp ViziVestSource/ViziVestControl/ViziVestControl.cpp WLED/usermods/ViziVestControl/
+
+          cp ViziVestSource/ViziVestControl/library.json \
+             WLED/usermods/ViziVestControl/
+
+          cp ViziVestSource/ViziVestControl/ViziVestControl.cpp \
+             WLED/usermods/ViziVestControl/
 
           echo "ViziVest files:"
           ls -la WLED/usermods/ViziVestControl
@@ -46,31 +50,39 @@ jobs:
 
       - name: Install PlatformIO
         working-directory: WLED
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
 
       - name: Configure WLED
         working-directory: WLED
         run: |
           cp usermods/platformio_override.usermods.ini platformio_override.ini
+
           echo >> platformio_override.ini
+
+          echo "[env:usermods_esp32]" >> platformio_override.ini
           echo "custom_usermods = ViziVestControl" >> platformio_override.ini
 
-          echo "Bluetooth build flags:"
-          echo "CONFIG_BT_ENABLED=1"
-          echo "CONFIG_BLUEDROID_ENABLED=1"
-          echo "CONFIG_BT_BLE_ENABLED=1"
-          echo "CONFIG_GATTS_ENABLE=1"
-          echo "CONFIG_GATTC_ENABLE=1"
-
           echo >> platformio_override.ini
-          echo "build_flags = \${esp32dev.build_flags} -DCONFIG_BT_ENABLED=1 -DCONFIG_BLUEDROID_ENABLED=1 -DCONFIG_BT_BLE_ENABLED=1 -DCONFIG_GATTS_ENABLE=1 -DCONFIG_GATTC_ENABLE=1" >> platformio_override.ini
 
           echo "Build configuration:"
           cat platformio_override.ini
 
+      - name: Enable Bluetooth configuration
+        working-directory: WLED
+        run: |
+          echo "CONFIG_BT_ENABLED=y" > sdkconfig.defaults
+          echo "CONFIG_BLUEDROID_ENABLED=y" >> sdkconfig.defaults
+          echo "CONFIG_BT_BLE_ENABLED=y" >> sdkconfig.defaults
+          echo "CONFIG_BT_GATTS_ENABLE=y" >> sdkconfig.defaults
+
+          echo "Bluetooth configuration:"
+          cat sdkconfig.defaults
+
       - name: Build WLED 16.0.1
         working-directory: WLED
-        run: pio run -e usermods_esp32
+        run: |
+          pio run -e usermods_esp32
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
