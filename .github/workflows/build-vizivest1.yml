@@ -58,6 +58,17 @@ jobs:
           echo "Build configuration:"
           cat platformio_override.ini
 
+      - name: Enable Bluetooth
+        working-directory: WLED
+        run: |
+          echo "CONFIG_BT_ENABLED=y" > sdkconfig.defaults
+          echo "CONFIG_BLUEDROID_ENABLED=y" >> sdkconfig.defaults
+          echo "CONFIG_BT_BLE_ENABLED=y" >> sdkconfig.defaults
+          echo "CONFIG_BT_GATTS_ENABLE=y" >> sdkconfig.defaults
+
+          echo "Bluetooth configuration:"
+          cat sdkconfig.defaults
+
       - name: Build WLED 16.0.1
         working-directory: WLED
         run: pio run -e usermods_esp32
