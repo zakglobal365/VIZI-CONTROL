@@ -1,31 +1,45 @@
-This is the last code that worked lets make use of it and stop searching all over place name: Build ViziVest 16.0.1
+Skip to content
+zakglobal365
+WLED
+Repository navigation
+Code
+Pull requests
+Actions
+Projects
+Wiki
+Security and quality
+Insights
+Settings
+Build ViziVest
+Create vizivest-build.yml #1
+All jobs
+Run details
+Workflow file for this run
+.github/workflows/vizivest-build.yml at 7b28e47
+name: Build ViziVest
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'usermods/ViziVest-BLE/**'
+      - '.github/workflows/vizivest-build.yml'
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout WLED 16.0.1
+      - name: Checkout WLED
         uses: actions/checkout@v4
-        with:
-          ref: v16.0.1
 
-      - name: Checkout ViziVest usermod
-        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          path: vizivest-source
-          ref: main
-          sparse-checkout: |
-            usermods/ViziVest-BLE
+          node-version-file: '.nvmrc'
 
-      - name: Install ViziVest usermod
-        run: |
-          cp -r vizivest-source/usermods/ViziVest-BLE usermods/ViziVest-BLE
-          ls -la usermods/ViziVest-BLE
+      - name: Install Node packages
+        run: npm ci
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -41,12 +55,11 @@ jobs:
           echo >> platformio_override.ini
           echo "custom_usermods = ViziVest-BLE" >> platformio_override.ini
           cat platformio_override.ini
-
       - name: Build ESP32 firmware
         run: pio run -e usermods_esp32
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ViziVest-WLED-16.0.1
+          name: ViziVest-WLED
           path: build_output/**
