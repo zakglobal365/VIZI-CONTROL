@@ -21,6 +21,15 @@ jobs:
         with:
           path: ViziVestSource
 
+      - name: Add ESP32 BLE Arduino library
+        run: |
+          git clone --depth 1 --branch 2.0.5 https://github.com/espressif/arduino-esp32.git /tmp/arduino-esp32
+          mkdir -p WLED/lib
+          cp -R /tmp/arduino-esp32/libraries/BLE WLED/lib/BLE
+
+          echo "BLE library installed:"
+          ls -la WLED/lib/BLE
+
       - name: Install ViziVest usermod
         run: |
           mkdir -p WLED/usermods/ViziVestControl
