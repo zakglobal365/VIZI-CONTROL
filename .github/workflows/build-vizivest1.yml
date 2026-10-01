@@ -1,47 +1,31 @@
-name: Build ViziVest WLED 16.0.1
+This is the last code that worked lets make use of it and stop searching all over place name: Build ViziVest 16.0.1
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build ViziVest Firmware
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout WLED 16.0.1
         uses: actions/checkout@v4
         with:
-          repository: WLED/WLED
           ref: v16.0.1
-          path: WLED
 
-      - name: Checkout ViziVest Control
+      - name: Checkout ViziVest usermod
         uses: actions/checkout@v4
         with:
-          path: ViziVestSource
-
-      - name: Add ESP32 BLE Arduino library
-        run: |
-          git clone --depth 1 --branch 2.0.5 https://github.com/espressif/arduino-esp32.git /tmp/arduino-esp32
-          mkdir -p WLED/lib
-          cp -R /tmp/arduino-esp32/libraries/BLE WLED/lib/BLE
-
-          echo "BLE library installed:"
-          ls -la WLED/lib/BLE
+          path: vizivest-source
+          ref: main
+          sparse-checkout: |
+            usermods/ViziVest-BLE
 
       - name: Install ViziVest usermod
         run: |
-          mkdir -p WLED/usermods/ViziVestControl
-
-          cp ViziVestSource/ViziVestControl/library.json \
-             WLED/usermods/ViziVestControl/
-
-          cp ViziVestSource/ViziVestControl/ViziVestControl.cpp \
-             WLED/usermods/ViziVestControl/
-
-          echo "ViziVest files:"
-          ls -la WLED/usermods/ViziVestControl
+          cp -r vizivest-source/usermods/ViziVest-BLE usermods/ViziVest-BLE
+          ls -la usermods/ViziVest-BLE
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -49,43 +33,20 @@ jobs:
           python-version: '3.12'
 
       - name: Install PlatformIO
-        working-directory: WLED
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
-      - name: Configure WLED
-        working-directory: WLED
+      - name: Configure ViziVest
         run: |
           cp usermods/platformio_override.usermods.ini platformio_override.ini
-
           echo >> platformio_override.ini
-
-          echo "[env:usermods_esp32]" >> platformio_override.ini
-          echo "custom_usermods = ViziVestControl" >> platformio_override.ini
-
-          echo >> platformio_override.ini
-
-          echo "Build configuration:"
+          echo "custom_usermods = ViziVest-BLE" >> platformio_override.ini
           cat platformio_override.ini
 
-      - name: Enable Bluetooth configuration
-        working-directory: WLED
-        run: |
-          echo "CONFIG_BT_ENABLED=y" > sdkconfig.defaults
-          echo "CONFIG_BLUEDROID_ENABLED=y" >> sdkconfig.defaults
-          echo "CONFIG_BT_BLE_ENABLED=y" >> sdkconfig.defaults
-          echo "CONFIG_BT_GATTS_ENABLE=y" >> sdkconfig.defaults
-
-          echo "Bluetooth configuration:"
-          cat sdkconfig.defaults
-
-      - name: Build WLED 16.0.1
-        working-directory: WLED
-        run: |
-          pio run -e usermods_esp32
+      - name: Build ESP32 firmware
+        run: pio run -e usermods_esp32
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: ViziVest-WLED-16.0.1
-          path: WLED/build_output/**
+          path: build_output/**
